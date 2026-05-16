@@ -1,0 +1,14 @@
+# ROS 2 & C++ 编译垃圾
+build/
+install/
+log/
+*.o
+*.so
+*.cmake
+
+# Python 缓存垃圾
+**/__pycache__/
+*.pyc
+
+# 编辑器配置
+.vscode/

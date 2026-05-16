@@ -1,0 +1,62 @@
+<root main_tree_to_execute="MainTree">
+    <BehaviorTree ID="MainTree">
+        <Sequence name="Auto_Injection_Pipeline">
+            <SubTree ID="Phase_1_Lid_Grab"/>
+            <SubTree ID="Phase_2_Lid_Drop"/>
+            <SubTree ID="Phase_3_Find_Hole"/>
+            <SubTree ID="Phase_4_Get_Gun"/>
+            <SubTree ID="Phase_5_Injection"/>
+            <SubTree ID="Phase_6_Return_Gun"/>
+            <SubTree ID="Phase_7_Retrieve_Lid"/>
+            <SubTree ID="Phase_8_Return_Lid"/>
+        </Sequence>
+    </BehaviorTree>
+
+    <BehaviorTree ID="Phase_1_Lid_Grab">
+        <Sequence name="Phase_1_Lid_Grab">
+            <Action ID="MoveToObserve"/> <Action ID="CheckHandleVisible"/> <Action ID="OpenGripper"/> <Action ID="MoveToLidApproach"/> <Action ID="MoveToLidGrasp"/> <Action ID="CloseGripper"/> <Action ID="MoveRelativeZUp150"/>
+        </Sequence>
+    </BehaviorTree>
+
+    <BehaviorTree ID="Phase_2_Lid_Drop">
+        <Sequence name="Phase_2_Lid_Drop">
+            <Action ID="MoveToLidDrop"/> <Action ID="OpenGripper"/> <Action ID="MoveToLidDropRetreat"/>
+        </Sequence>
+    </BehaviorTree>
+
+    <BehaviorTree ID="Phase_3_Find_Hole">
+        <Sequence name="Phase_3_Find_Hole">
+            <Action ID="MoveToObserve"/> <Action ID="CheckArUcoVisible"/>
+        </Sequence>
+    </BehaviorTree>
+
+    <BehaviorTree ID="Phase_4_Get_Gun">
+        <Sequence name="Phase_4_Get_Gun">
+            <Action ID="MoveToGunGrab"/> <Action ID="CloseGripper"/> <Action ID="MoveRelativeZUp150"/> <Action ID="MoveToPreInject"/>
+        </Sequence>
+    </BehaviorTree>
+
+    <BehaviorTree ID="Phase_5_Injection">
+        <Sequence name="Phase_5_Injection">
+            <Action ID="MoveToArUcoHover"/> <Action ID="MoveToArUcoInject"/> <Action ID="MoveToArUcoHover"/>
+        </Sequence>
+    </BehaviorTree>
+
+    <BehaviorTree ID="Phase_6_Return_Gun">
+        <Sequence name="Phase_6_Return_Gun">
+            <Action ID="MoveToGunGrab"/> <Action ID="OpenGripper"/> <Action ID="MoveRelativeZUp150"/>
+        </Sequence>
+    </BehaviorTree>
+
+    <BehaviorTree ID="Phase_7_Retrieve_Lid">
+        <Sequence name="Phase_7_Retrieve_Lid">
+            <Action ID="MoveToLidDrop"/> <Action ID="CloseGripper"/> <Action ID="MoveRelativeZUp150"/>
+        </Sequence>
+    </BehaviorTree>
+
+    <BehaviorTree ID="Phase_8_Return_Lid">
+        <Sequence name="Phase_8_Return_Lid">
+            <Action ID="MoveToLidApproach"/> <Action ID="MoveToLidGrasp"/> <Action ID="OpenGripper"/> <Action ID="MoveRelativeZUp150"/> <Action ID="MoveToObserve"/>
+        </Sequence>
+    </BehaviorTree>
+</root>

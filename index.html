@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <title>FAIRINO 智能视觉注液中心</title>
+    <style>
+        /* === 工业级深色主题变量 === */
+        :root { 
+            --bg-color: #0B1120;         /* 深空蓝底色 */
+            --panel-bg: #151E2D;         /* 面板底色 */
+            --border-color: #2A3B54;     /* 连线与边框 */
+            --text-main: #E2E8F0;        /* 主文字 */
+            --text-muted: #94A3B8;       /* 次要文字 */
+            --color-idle: #1E293B;       /* 未激活状态 */
+            --color-running: #3B82F6;    /* 运行中：科技蓝 */
+            --color-success: #10B981;    /* 成功：翡翠绿 */
+            --color-failure: #EF4444;    /* 失败：警示红 */
+        }
+        
+        body { background: var(--bg-color); color: var(--text-main); font-family: -apple-system, BlinkMacSystemFont, 'Microsoft YaHei', sans-serif; margin: 0; padding: 20px; display: flex; flex-direction: column; height: 95vh; overflow: hidden; }
+        
+        /* 顶部导航栏 */
+        .header { display: flex; justify-content: space-between; align-items: center; background: var(--panel-bg); padding: 15px 30px; border-radius: 12px; border: 1px solid var(--border-color); margin-bottom: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 2px; }
+        .btn-group { display: flex; gap: 15px; }
+        button { padding: 12px 28px; border: none; border-radius: 6px; font-size: 15px; font-weight: bold; cursor: pointer; transition: 0.2s; letter-spacing: 1px; color: white; }
+        #btn-start { background: var(--color-running); box-shadow: 0 0 15px rgba(59, 130, 246, 0.4); }
+        #btn-start:hover { background: #2563EB; box-shadow: 0 0 25px rgba(59, 130, 246, 0.6); transform: translateY(-2px); }
+        #btn-stop { background: var(--color-failure); box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
+        #btn-stop:hover { background: #DC2626; transform: translateY(-2px); }
+
+        .main-content { display: flex; gap: 20px; flex: 1; min-height: 0; }
+        .panel { background: var(--panel-bg); border-radius: 12px; border: 1px solid var(--border-color); display: flex; flex-direction: column; }
+        .panel-header { padding: 15px 20px; border-bottom: 1px solid var(--border-color); font-weight: 600; font-size: 16px; color: var(--text-muted); display: flex; align-items: center; gap: 10px; }
+
+        /* === 左侧：高反差遥测终端 === */
+        .telemetry-panel { flex: 25; min-width: 320px; display: flex; flex-direction: column; }
+        .hardware-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 20px; border-bottom: 1px solid var(--border-color); }
+        .hw-node { background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 10px; border-radius: 6px; text-align: center; font-size: 13px; color: var(--text-muted); transition: 0.3s; }
+        .hw-node.ready { border-color: var(--color-success); color: var(--color-success); background: rgba(16, 185, 129, 0.1); box-shadow: inset 0 0 10px rgba(16,185,129,0.2); }
+        
+        .terminal { flex: 1; background: #060913; padding: 15px; font-family: 'Consolas', monospace; font-size: 13px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+        .log-line { line-height: 1.5; word-wrap: break-word; font-weight: bold; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 4px; }
+        .log-time { color: #475569; font-size: 12px; margin-right: 8px; font-weight: normal; }
+
+        /* === 右侧：优雅的思维导图树 === */
+        .bt-board { flex: 75; overflow: auto; padding: 30px; position: relative; background: radial-gradient(circle at center, #151E2D 0%, #0B1120 100%); }
+        
+        /* 树状布局容器 */
+        .tree-layout { display: flex; align-items: flex-start; gap: 40px; min-width: max-content; }
+        
+        /* 根节点 */
+        .root-wrapper { position: relative; display: flex; align-items: center; margin-top: 350px; } /* 居中对齐 */
+        .node-root { background: #1E293B; border: 2px solid #475569; color: white; padding: 15px 30px; border-radius: 8px; font-weight: bold; font-size: 16px; position: relative; z-index: 2; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
+        .root-wrapper::after { content: ''; position: absolute; right: -40px; top: 50%; width: 40px; height: 2px; background: var(--border-color); }
+
+        /* 阶段容器（垂直排列） */
+        .phases-container { display: flex; flex-direction: column; gap: 20px; position: relative; }
+        /* 左侧主干线 */
+        .phases-container::before { content: ''; position: absolute; left: -40px; top: 25px; bottom: 25px; width: 2px; background: var(--border-color); }
+
+        /* 每一行：阶段节点 + 动作节点组 */
+        .phase-row { display: flex; align-items: center; gap: 40px; position: relative; }
+        /* 连接主干的分支线 */
+        .phase-row::before { content: ''; position: absolute; left: -40px; top: 50%; width: 40px; height: 2px; background: var(--border-color); }
+
+        .node-phase { background: #1E293B; border: 2px solid var(--border-color); color: #CBD5E1; padding: 12px 20px; border-radius: 6px; font-weight: bold; font-size: 14px; min-width: 160px; text-align: center; position: relative; transition: 0.3s; z-index: 2;}
+        .node-phase::after { content: ''; position: absolute; right: -40px; top: 50%; width: 40px; height: 2px; background: var(--border-color); }
+
+        /* 动作节点容器（横向排列） */
+        .actions-container { display: flex; gap: 15px; position: relative; }
+        /* 贯穿动作的横线 */
+        .actions-container::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 2px; background: var(--border-color); z-index: 1; }
+
+        .node-action { background: #0F172A; border: 2px solid var(--border-color); padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; color: #94A3B8; position: relative; z-index: 2; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); white-space: nowrap;}
+
+        /* === 动态状态类 === */
+        .status-running { 
+            border-color: var(--color-running) !important; 
+            color: white !important; 
+            background: rgba(59, 130, 246, 0.2) !important;
+            transform: scale(1.1); 
+            box-shadow: 0 0 15px var(--color-running), inset 0 0 10px var(--color-running);
+            text-shadow: 0 0 8px #fff;
+        }
+        .status-success { 
+            border-color: var(--color-success) !important; 
+            color: var(--color-success) !important; 
+            background: rgba(16, 185, 129, 0.1) !important; 
+        }
+        .status-failure { 
+            border-color: var(--color-failure) !important; 
+            color: white !important; 
+            background: rgba(239, 68, 68, 0.3) !important; 
+            box-shadow: 0 0 15px var(--color-failure);
+        }
+        /* 动画闪烁 */
+        @keyframes pulse-red { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,0.7); } 70% { box-shadow: 0 0 0 15px rgba(239,68,68,0); } 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); } }
+        .emergency { animation: pulse-red 1.5s infinite; border-color: var(--color-failure) !important; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>FAIRINO 智能视觉流水线 · 状态遥测核心 (HMI)</h1>
+        <div class="btn-group">
+            <button id="btn-start" onclick="ws.send('START')">▶ 初始化系统并启动</button>
+            <button id="btn-stop" onclick="ws.send('STOP')">🛑 紧急物理熔断</button>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="panel telemetry-panel">
+            <div class="panel-header">⚙️ 硬件就绪状态</div>
+            <div class="hardware-grid">
+                <div class="hw-node" id="sys-0">机械臂控制核</div><div class="hw-node" id="sys-1">3D 相机服务</div>
+                <div class="hw-node" id="sys-2">运动解算节点</div><div class="hw-node" id="sys-3">机器视觉节点</div>
+                <div class="hw-node" style="grid-column: span 2;" id="sys-4">行为树数据中枢</div>
+            </div>
+            <div class="panel-header" style="border-top: 1px solid var(--border-color);">📡 实时遥测数据流 (Telemetry JSON)</div>
+            <div class="terminal" id="terminal">
+                <div class="log-line" style="color:var(--text-muted);"><span class="log-time">[SYS]</span>等待后台服务挂载...</div>
+            </div>
+        </div>
+
+        <div class="panel bt-board">
+            <div class="tree-layout">
+                <div class="root-wrapper">
+                    <div class="node-root" id="Auto_Injection_Pipeline">主序列：全自动注液流水线</div>
+                </div>
+                <div class="phases-container" id="tree-render">
+                    </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 核心中英文字典：将底层 C++ 抽象类名转换为人类可读的动作
+        // ==========================================
+        const dict = {
+            // 阶段名
+            "Phase_1_Lid_Grab": "[阶段 1] 锁定并抓取桶盖",
+            "Phase_2_Lid_Drop": "[阶段 2] 转移至暂存区",
+            "Phase_3_Find_Hole": "[阶段 3] 视觉定位注液口",
+            "Phase_4_Get_Gun": "[阶段 4] 提取注液枪体",
+            "Phase_5_Injection": "[阶段 5] 核心下插与注液",
+            "Phase_6_Return_Gun": "[阶段 6] 安全归还枪体",
+            "Phase_7_Retrieve_Lid": "[阶段 7] 寻回暂存桶盖",
+            "Phase_8_Return_Lid": "[阶段 8] 精准封装复位",
+            // 动作名
+            "MoveToObserve": "移动至高空观测点",
+            "CheckHandleVisible": "提取盖子把手位姿",
+            "CheckArUcoVisible": "解算 ArUco 物理位姿",
+            "OpenGripper": "张开末端夹爪",
+            "CloseGripper": "完全闭合夹爪",
+            "MoveToLidApproach": "安全悬停对准(Z+100)",
+            "MoveToLidGrasp": "柔性下探接触表面",
+            "MoveRelativeZUp150": "安全高度垂直拔起",
+            "MoveToLidDrop": "移动至盖子暂存区",
+            "MoveToGunGrab": "盲降至注液枪握把",
+            "MoveToPreInject": "进入注液预备位",
+            "MoveToArUcoHover": "注液口正上方悬停",
+            "MoveToArUcoInject": "慢速插管与注液(5s)"
+        };
+
+        function t(key) { return dict[key] || key; }
+
+        const treeData = [
+            { id: "Phase_1_Lid_Grab", nodes: ["MoveToObserve", "CheckHandleVisible", "OpenGripper", "MoveToLidApproach", "MoveToLidGrasp", "CloseGripper", "MoveRelativeZUp150"] },
+            { id: "Phase_2_Lid_Drop", nodes: ["MoveToLidDrop", "OpenGripper", "MoveRelativeZUp150"] },
+            { id: "Phase_3_Find_Hole", nodes: ["MoveToObserve", "CheckArUcoVisible"] },
+            { id: "Phase_4_Get_Gun", nodes: ["MoveToGunGrab", "CloseGripper", "MoveRelativeZUp150", "MoveToPreInject"] },
+            { id: "Phase_5_Injection", nodes: ["MoveToArUcoHover", "MoveToArUcoInject", "MoveToArUcoHover"] },
+            { id: "Phase_6_Return_Gun", nodes: ["MoveToGunGrab", "OpenGripper", "MoveRelativeZUp150"] },
+            { id: "Phase_7_Retrieve_Lid", nodes: ["MoveToLidDrop", "CloseGripper", "MoveRelativeZUp150"] },
+            { id: "Phase_8_Return_Lid", nodes: ["MoveToLidApproach", "MoveToLidGrasp", "OpenGripper", "MoveRelativeZUp150", "MoveToObserve"] }
+        ];
+
+        // 渲染树状图
+        const treeRender = document.getElementById('tree-render');
+        treeData.forEach((phase) => {
+            const row = document.createElement('div'); row.className = 'phase-row';
+            const head = document.createElement('div'); head.className = 'node-phase'; head.id = phase.id; head.innerText = t(phase.id);
+            const actGroup = document.createElement('div'); actGroup.className = 'actions-container';
+            
+            phase.nodes.forEach(nodeName => {
+                const act = document.createElement('div'); act.className = 'node-action'; 
+                act.id = `node-${phase.id}-${nodeName}`; // 复合ID防重名
+                act.innerText = t(nodeName);
+                actGroup.appendChild(act);
+            });
+            row.appendChild(head); row.appendChild(actGroup); treeRender.appendChild(row);
+        });
+
+        // WebSocket 逻辑
+        const ws = new WebSocket(`ws://${window.location.host}/ws`);
+        const term = document.getElementById('terminal');
+        
+        let currentPhaseId = null;
+
+        function addLog(text, color) {
+            const div = document.createElement('div');
+            div.className = 'log-line'; div.style.color = color;
+            const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false });
+            div.innerHTML = `<span class="log-time">[${timeStr}]</span>${text}`;
+            term.appendChild(div);
+            term.scrollTop = term.scrollHeight;
+        }
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'STARTUP_PROGRESS') {
+                if (data.payload.status === 'READY') {
+                    document.getElementById(`sys-${data.payload.idx}`).classList.add('ready');
+                }
+            } 
+            else if (data.type === 'BT_TELEMETRY') {
+                const nodeName = data.payload.node;
+                const status = data.payload.status; // IDLE, RUNNING, SUCCESS, FAILURE
+                
+                // --- 终端色彩逻辑 ---
+                let color = "#94A3B8"; // 默认灰
+                if (status === 'SUCCESS') color = "#10B981"; // 绿
+                if (status === 'RUNNING') color = "#3B82F6"; // 蓝
+                if (status === 'FAILURE') color = "#EF4444"; // 红
+                
+                addLog(`> ${JSON.stringify(data.payload)}`, color);
+
+                // --- 视觉树脉冲逻辑 ---
+                if (data.payload.type === 'CONTROL' && document.getElementById(nodeName)) {
+                    if (status === 'RUNNING') {
+                        if (currentPhaseId) document.getElementById(currentPhaseId).classList.remove('status-running');
+                        currentPhaseId = nodeName;
+                        document.getElementById(nodeName).classList.add('status-running');
+                        // 滚动条自动跟踪
+                        document.getElementById(nodeName).scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+                    } else if (status === 'SUCCESS') {
+                        document.getElementById(nodeName).classList.remove('status-running');
+                        document.getElementById(nodeName).classList.add('status-success');
+                    }
+                } 
+                else if (currentPhaseId) {
+                    const targetEl = document.getElementById(`node-${currentPhaseId}-${nodeName}`);
+                    if (targetEl) {
+                        targetEl.classList.remove('status-running', 'status-success', 'status-failure');
+                        if (status === 'RUNNING') targetEl.classList.add('status-running');
+                        if (status === 'SUCCESS') targetEl.classList.add('status-success');
+                        if (status === 'FAILURE') targetEl.classList.add('status-failure', 'emergency');
+                    }
+                }
+            }
+            else if (data.type === 'LOG') {
+                addLog(data.payload, data.color || "#CBD5E1");
+                if (data.payload.includes('熔断')) document.querySelector('.header').classList.add('emergency');
+            }
+        };
+    </script>
+</body>
+</html>
