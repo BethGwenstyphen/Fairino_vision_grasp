@@ -285,7 +285,7 @@ public:
     BT::NodeStatus onStart() override {
         if (GraspData::locked_handle_pose.empty()) return BT::NodeStatus::FAILURE;
         auto t = GraspData::locked_handle_pose; target_pos_ = {t[0], t[1], t[2] + 100.0}; // 在上方 10cm 悬停
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {2.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], t[3], t[4], t[5]}; 
+        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {2.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], t[3], t[4], t[5], 3.0}; 
         pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
     }
     BT::NodeStatus onRunning() override { CARTESIAN_CHECK_LOGIC(3.0) }
@@ -303,7 +303,7 @@ public:
     BT::NodeStatus onStart() override {
         if (GraspData::locked_handle_pose.empty()) return BT::NodeStatus::FAILURE;
         auto t = GraspData::locked_handle_pose; target_pos_ = {t[0], t[1], t[2] + 3.0}; // 留 8mm 余量，速度降为 5.0 往下直插
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {1.0, 5.0, target_pos_[0], target_pos_[1], target_pos_[2], t[3], t[4], t[5]}; 
+        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {1.0, 5.0, target_pos_[0], target_pos_[1], target_pos_[2], t[3], t[4], t[5], 3.0}; 
         pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
     }
     BT::NodeStatus onRunning() override { CARTESIAN_CHECK_LOGIC(3.0) }
@@ -322,7 +322,7 @@ public:
         if (!latest_state_) return BT::NodeStatus::FAILURE;
         target_pos_ = {latest_state_->cart_x_cur_pos, latest_state_->cart_y_cur_pos, latest_state_->cart_z_cur_pos + 150.0};
         auto cmd = std_msgs::msg::Float64MultiArray(); 
-        cmd.data = {1.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], latest_state_->cart_a_cur_pos, latest_state_->cart_b_cur_pos, latest_state_->cart_c_cur_pos};
+        cmd.data = {1.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], latest_state_->cart_a_cur_pos, latest_state_->cart_b_cur_pos, latest_state_->cart_c_cur_pos, 3.0};
         pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
     }
     BT::NodeStatus onRunning() override { CARTESIAN_CHECK_LOGIC(3.0) }
@@ -342,7 +342,7 @@ public:
     static BT::PortsList providedPorts() { return {}; }
     BT::NodeStatus onStart() override {
         target_pos_ = {-123.093, -54.4, 69.633, -105.855, -91.203, 47.568};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5]};
+        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5],1.0};
         pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
     }
     BT::NodeStatus onRunning() override { JOINT_CHECK_LOGIC(1.0) }
@@ -359,7 +359,7 @@ public:
     static BT::PortsList providedPorts() { return {}; }
     BT::NodeStatus onStart() override {
         target_pos_ = {-91.111, -49.863, 62.262, -107.5, -91.199, 47.568};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5]};
+        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5],1.0};
         pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
     }
     BT::NodeStatus onRunning() override { JOINT_CHECK_LOGIC(1.0) }
@@ -377,7 +377,7 @@ public:
     static BT::PortsList providedPorts() { return {}; }
     BT::NodeStatus onStart() override {
         target_pos_ = {-88.86, -58.578, 76.925, -109.098, -91.205, 47.568};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5]};
+        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5],1.0};
         pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
     }
     BT::NodeStatus onRunning() override { JOINT_CHECK_LOGIC(1.0) }
@@ -394,7 +394,7 @@ public:
     static BT::PortsList providedPorts() { return {}; }
     BT::NodeStatus onStart() override {
         target_pos_ = {-101.182, -67.327, 93.768, -114.608, -91.624, 47.568};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5]};
+        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5],1.0};
         pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
     }
     BT::NodeStatus onRunning() override { JOINT_CHECK_LOGIC(1.0) }
@@ -411,7 +411,7 @@ public:
     static BT::PortsList providedPorts() { return {}; }
     BT::NodeStatus onStart() override {
         target_pos_ = {-121.014, -42.733, 101.151, -236.295, -87.529, 47.567};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5]};
+        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5],1.0};
         pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
     }
     BT::NodeStatus onRunning() override { JOINT_CHECK_LOGIC(1.0) }
@@ -432,7 +432,7 @@ public:
     BT::NodeStatus onStart() override {
         if (GraspData::locked_aruco_pose.empty()) return BT::NodeStatus::FAILURE;
         auto t = GraspData::locked_aruco_pose; target_pos_ = {t[0] + 90.0, t[1] - 110.0, t[2] + 350.0};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {2.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], 93.126, -49.220, -127.327};
+        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {2.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], 93.126, -49.220, -127.327,3.0};
         pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
     }
     BT::NodeStatus onRunning() override { CARTESIAN_CHECK_LOGIC(3.0) }
@@ -450,7 +450,8 @@ public:
     BT::NodeStatus onStart() override {
         if (GraspData::locked_aruco_pose.empty()) return BT::NodeStatus::FAILURE;
         auto t = GraspData::locked_aruco_pose; target_pos_ = {t[0] + 90.0, t[1] - 110.0, t[2] + 200.0};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {1.0, 5.0, target_pos_[0], target_pos_[1], target_pos_[2], 93.126, -49.220, -127.327};
+        auto cmd = std_msgs::msg::Float64MultiArray(); 
+        cmd.data = {1.0, 5.0, target_pos_[0], target_pos_[1], target_pos_[2], 93.126, -49.220, -127.327, 3.0};
         pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
     }
     BT::NodeStatus onRunning() override {

@@ -19,8 +19,8 @@ public:
     }
 
     // 【核心修正】：严格对齐 BehaviorTree.CPP V3 的传值签名 (BT::Duration)
-    void callback(BT::Duration timestamp, const BT::TreeNode& node,
-                  BT::NodeStatus prev_status, BT::NodeStatus status) override {
+    void callback(BT::Duration /*timestamp*/, const BT::TreeNode& node,
+                  BT::NodeStatus /*prev_status*/, BT::NodeStatus status) override {
         
         std::string status_str = BT::toStr(status); // IDLE, RUNNING, SUCCESS, FAILURE
         std::string type_str = (node.type() == BT::NodeType::ACTION) ? "ACTION" : 

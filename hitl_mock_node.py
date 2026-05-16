@@ -35,7 +35,7 @@ class DigitalTwinSim(Node):
         self.get_logger().info(f"🗜️ 物理引擎模拟: 夹爪正在【{state}】...")
 
     def cmd_callback(self, msg):
-        if len(msg.data) < 8: return
+        if len(msg.data) < 9: return
         self.move_type = int(msg.data[0])
         # 提取目标位姿数据
         self.target_pose = list(msg.data[2:8])
