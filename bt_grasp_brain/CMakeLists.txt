@@ -34,8 +34,10 @@ ament_target_dependencies(bt_main_node
 install(TARGETS bt_main_node
   DESTINATION lib/${PROJECT_NAME})
 
-# 【关键点】让 ROS 2 安装你的 XML 行为树图纸，否则运行时找不到！
-install(DIRECTORY behavior_trees/
-  DESTINATION share/${PROJECT_NAME}/behavior_trees)
+install(DIRECTORY
+  launch
+  behavior_trees
+  DESTINATION share/${PROJECT_NAME}
+)
 
 ament_package()

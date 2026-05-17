@@ -11,33 +11,18 @@
 #include <algorithm>
 
 // =========================================================
-// 全局记忆锁与纯物理坐标校验器
+// 1.全局记忆锁与底层指令反馈监听
 // =========================================================
 namespace GraspData {
     inline std::vector<double> locked_handle_pose;
     inline std::vector<double> locked_aruco_pose;
-
-    inline bool check_joint_reached(const std::vector<double>& target, const fairino_msgs::msg::RobotNonrtState& state, double tol = 1.0) {
-        if(target.size() < 6) return false;
-        double err = std::max({
-            std::abs(target[0] - state.j1_cur_pos), std::abs(target[1] - state.j2_cur_pos),
-            std::abs(target[2] - state.j3_cur_pos), std::abs(target[3] - state.j4_cur_pos),
-            std::abs(target[4] - state.j5_cur_pos), std::abs(target[5] - state.j6_cur_pos)
-        });
-        return err < tol;
-    }
-
-    inline bool check_cartesian_reached(const std::vector<double>& target, const fairino_msgs::msg::RobotNonrtState& state, double tol = 3.0) {
-        if(target.size() < 3) return false;
-        double dx = target[0] - state.cart_x_cur_pos;
-        double dy = target[1] - state.cart_y_cur_pos;
-        double dz = target[2] - state.cart_z_cur_pos;
-        return std::sqrt(dx*dx + dy*dy + dz*dz) < tol;
-    }
+    
+    // 底层反馈状态：0=空闲/未知, 1=执行中, 2=成功, -1=失败或碰撞
+    inline int cmd_feedback_status = 0; 
 }
 
 // =========================================================
-// 1. 视觉监测节点 (V12 极简去冗版：严格 6 秒 EMA 收敛 + 无脑均值锁定)
+// 2. 视觉监测节点 (V12 极简去冗版：严格 6 秒 EMA 收敛 + 无脑均值锁定)
 // =========================================================
 class CheckHandleVisible : public BT::StatefulActionNode {
 public:
@@ -191,7 +176,7 @@ private:
 };
 
 // =========================================================
-// 2. 夹爪控制节点 (增加物理动作延时)
+// 3. 夹爪控制节点 (增加物理动作延时)
 // =========================================================
 class CloseGripper : public BT::SyncActionNode {
 public:
@@ -230,253 +215,188 @@ private: rclcpp::Node::SharedPtr node_; rclcpp::Publisher<std_msgs::msg::Int8>::
 };
 
 // =========================================================
-// 宏定义：终极物理闭环校验核
+// 4.万能绝对关节运动节点 (参数由 XML 动态注入)
 // =========================================================
-#define CARTESIAN_CHECK_LOGIC(TOLERANCE) \
-    rclcpp::spin_some(node_); \
-    if (!latest_state_) return BT::NodeStatus::RUNNING; \
-    double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - cmd_time_).count(); \
-    bool reached = GraspData::check_cartesian_reached(target_pos_, *latest_state_, TOLERANCE); \
-    if (!has_started_) { \
-        if (latest_state_->robot_motion_done == 0) { has_started_ = true; RCLCPP_INFO(node_->get_logger(), "🚄 底层已起步..."); } \
-        else if (elapsed > 2.0) { \
-            if (reached) return BT::NodeStatus::SUCCESS; \
-            RCLCPP_ERROR(node_->get_logger(), "🚨 熔断：未起步且不在目标！(目标Z:%.1f, 当前Z:%.1f)", target_pos_[2], latest_state_->cart_z_cur_pos); return BT::NodeStatus::FAILURE; \
-        } \
-        return BT::NodeStatus::RUNNING; \
-    } else { \
-        if (latest_state_->robot_motion_done == 1) { \
-            if (reached) return BT::NodeStatus::SUCCESS; \
-            RCLCPP_ERROR(node_->get_logger(), "💥 熔断：异常停机！疑似发生碰撞 (目标Z:%.1f, 实际Z:%.1f)", target_pos_[2], latest_state_->cart_z_cur_pos); return BT::NodeStatus::FAILURE; \
-        } \
-        return BT::NodeStatus::RUNNING; \
-    }
-
-#define JOINT_CHECK_LOGIC(TOLERANCE) \
-    rclcpp::spin_some(node_); \
-    if (!latest_state_) return BT::NodeStatus::RUNNING; \
-    double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - cmd_time_).count(); \
-    bool reached = GraspData::check_joint_reached(target_pos_, *latest_state_, TOLERANCE); \
-    if (!has_started_) { \
-        if (latest_state_->robot_motion_done == 0) { has_started_ = true; RCLCPP_INFO(node_->get_logger(), "🚄 底层已起步..."); } \
-        else if (elapsed > 2.0) { \
-            if (reached) return BT::NodeStatus::SUCCESS; \
-            RCLCPP_ERROR(node_->get_logger(), "🚨 熔断：关节未响应！"); return BT::NodeStatus::FAILURE; \
-        } \
-        return BT::NodeStatus::RUNNING; \
-    } else { \
-        if (latest_state_->robot_motion_done == 1) { \
-            if (reached) return BT::NodeStatus::SUCCESS; \
-            RCLCPP_ERROR(node_->get_logger(), "💥 熔断：异常停机！关节角偏差过大！"); return BT::NodeStatus::FAILURE; \
-        } \
-        return BT::NodeStatus::RUNNING; \
-    }
-
-// =========================================================
-// 3. 把手操作节点 (悬停 -> 慢插 -> 相对拔起)
-// =========================================================
-class MoveToLidApproach : public BT::StatefulActionNode {
+class MoveJAction : public BT::StatefulActionNode {
 public:
-    MoveToLidApproach(const std::string& name, const BT::NodeConfiguration& config, rclcpp::Node::SharedPtr node) : BT::StatefulActionNode(name, config), node_(node) {
+    MoveJAction(const std::string& name, const BT::NodeConfiguration& config, rclcpp::Node::SharedPtr node) 
+        : BT::StatefulActionNode(name, config), node_(node) {
         pub_cmd_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>("/arm_control_cmd", 10);
-        sub_state_ = node_->create_subscription<fairino_msgs::msg::RobotNonrtState>("nonrt_state_data", 10, [this](const fairino_msgs::msg::RobotNonrtState::SharedPtr msg) { latest_state_ = msg; });
     }
-    static BT::PortsList providedPorts() { return {}; }
-    BT::NodeStatus onStart() override {
-        if (GraspData::locked_handle_pose.empty()) return BT::NodeStatus::FAILURE;
-        auto t = GraspData::locked_handle_pose; target_pos_ = {t[0], t[1], t[2] + 100.0}; // 在上方 10cm 悬停
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {2.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], t[3], t[4], t[5], 3.0}; 
-        pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
-    }
-    BT::NodeStatus onRunning() override { CARTESIAN_CHECK_LOGIC(3.0) }
-    void onHalted() override {}
-private: rclcpp::Node::SharedPtr node_; rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_; rclcpp::Subscription<fairino_msgs::msg::RobotNonrtState>::SharedPtr sub_state_; std::vector<double> target_pos_; bool has_started_ = false; std::chrono::steady_clock::time_point cmd_time_; fairino_msgs::msg::RobotNonrtState::SharedPtr latest_state_ = nullptr;
-};
 
-class MoveToLidGrasp : public BT::StatefulActionNode {
-public:
-    MoveToLidGrasp(const std::string& name, const BT::NodeConfiguration& config, rclcpp::Node::SharedPtr node) : BT::StatefulActionNode(name, config), node_(node) {
-        pub_cmd_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>("/arm_control_cmd", 10);
-        sub_state_ = node_->create_subscription<fairino_msgs::msg::RobotNonrtState>("nonrt_state_data", 10, [this](const fairino_msgs::msg::RobotNonrtState::SharedPtr msg) { latest_state_ = msg; });
+    // 暴露给 XML 的参数接口 (Ports)
+    static BT::PortsList providedPorts() {
+        return {
+            BT::InputPort<std::string>("target"),  // 目标坐标字符串，例如 "-123.0, -54.4, ..."
+            BT::InputPort<double>("speed"),        // 速度
+            BT::InputPort<double>("tol")           // 动态容差
+        };
     }
-    static BT::PortsList providedPorts() { return {}; }
-    BT::NodeStatus onStart() override {
-        if (GraspData::locked_handle_pose.empty()) return BT::NodeStatus::FAILURE;
-        auto t = GraspData::locked_handle_pose; target_pos_ = {t[0], t[1], t[2] + 3.0}; // 留 8mm 余量，速度降为 5.0 往下直插
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {1.0, 5.0, target_pos_[0], target_pos_[1], target_pos_[2], t[3], t[4], t[5], 3.0}; 
-        pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
-    }
-    BT::NodeStatus onRunning() override { CARTESIAN_CHECK_LOGIC(3.0) }
-    void onHalted() override {}
-private: rclcpp::Node::SharedPtr node_; rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_; rclcpp::Subscription<fairino_msgs::msg::RobotNonrtState>::SharedPtr sub_state_; std::vector<double> target_pos_; bool has_started_ = false; std::chrono::steady_clock::time_point cmd_time_; fairino_msgs::msg::RobotNonrtState::SharedPtr latest_state_ = nullptr;
-};
 
-class MoveRelativeZUp150 : public BT::StatefulActionNode {
-public:
-    MoveRelativeZUp150(const std::string& name, const BT::NodeConfiguration& config, rclcpp::Node::SharedPtr node) : BT::StatefulActionNode(name, config), node_(node) {
-        pub_cmd_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>("/arm_control_cmd", 10);
-        sub_state_ = node_->create_subscription<fairino_msgs::msg::RobotNonrtState>("nonrt_state_data", 10, [this](const fairino_msgs::msg::RobotNonrtState::SharedPtr msg) { latest_state_ = msg; });
-    }
-    static BT::PortsList providedPorts() { return {}; }
     BT::NodeStatus onStart() override {
-        if (!latest_state_) return BT::NodeStatus::FAILURE;
-        target_pos_ = {latest_state_->cart_x_cur_pos, latest_state_->cart_y_cur_pos, latest_state_->cart_z_cur_pos + 150.0};
+        std::string target_str;
+        double speed = 15.0;
+        double tol = 1.0;
+
+        // 从 XML 中读取参数，如果没写就用默认值
+        if (!getInput<std::string>("target", target_str)) {
+            RCLCPP_ERROR(node_->get_logger(), "未提供 target 参数！");
+            return BT::NodeStatus::FAILURE;
+        }
+        getInput<double>("speed", speed);
+        getInput<double>("tol", tol);
+
+        // 解析以逗号分隔的字符串为 double 数组
+        std::vector<double> target_pos;
+        std::stringstream ss(target_str);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            target_pos.push_back(std::stod(item));
+        }
+
+        if (target_pos.size() != 6) {
+            RCLCPP_ERROR(node_->get_logger(), "关节目标参数错误，必须是 6 个数值！");
+            return BT::NodeStatus::FAILURE;
+        }
+
+        // 打包 9 位协议：[3.0(MoveJ类型), 速度, j1...j6, 容差]
         auto cmd = std_msgs::msg::Float64MultiArray(); 
-        cmd.data = {1.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], latest_state_->cart_a_cur_pos, latest_state_->cart_b_cur_pos, latest_state_->cart_c_cur_pos, 3.0};
-        pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
-    }
-    BT::NodeStatus onRunning() override { CARTESIAN_CHECK_LOGIC(3.0) }
-    void onHalted() override {}
-private: rclcpp::Node::SharedPtr node_; rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_; rclcpp::Subscription<fairino_msgs::msg::RobotNonrtState>::SharedPtr sub_state_; std::vector<double> target_pos_; bool has_started_ = false; std::chrono::steady_clock::time_point cmd_time_; fairino_msgs::msg::RobotNonrtState::SharedPtr latest_state_ = nullptr;
-};
-
-// =========================================================
-// 4. 绝对关节角盲操节点 (全量更新为最新点位，新增撤退点)
-// =========================================================
-class MoveToObserve : public BT::StatefulActionNode {
-public:
-    MoveToObserve(const std::string& name, const BT::NodeConfiguration& config, rclcpp::Node::SharedPtr node) : BT::StatefulActionNode(name, config), node_(node) {
-        pub_cmd_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>("/arm_control_cmd", 10);
-        sub_state_ = node_->create_subscription<fairino_msgs::msg::RobotNonrtState>("nonrt_state_data", 10, [this](const fairino_msgs::msg::RobotNonrtState::SharedPtr msg) { latest_state_ = msg; });
-    }
-    static BT::PortsList providedPorts() { return {}; }
-    BT::NodeStatus onStart() override {
-        target_pos_ = {-123.093, -54.4, 69.633, -105.855, -91.203, 47.568};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5],1.0};
-        pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
-    }
-    BT::NodeStatus onRunning() override { JOINT_CHECK_LOGIC(1.0) }
-    void onHalted() override {}
-private: rclcpp::Node::SharedPtr node_; rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_; rclcpp::Subscription<fairino_msgs::msg::RobotNonrtState>::SharedPtr sub_state_; std::vector<double> target_pos_; bool has_started_ = false; std::chrono::steady_clock::time_point cmd_time_; fairino_msgs::msg::RobotNonrtState::SharedPtr latest_state_ = nullptr;
-};
-
-class MoveToLidDrop : public BT::StatefulActionNode {
-public:
-    MoveToLidDrop(const std::string& name, const BT::NodeConfiguration& config, rclcpp::Node::SharedPtr node) : BT::StatefulActionNode(name, config), node_(node) {
-        pub_cmd_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>("/arm_control_cmd", 10);
-        sub_state_ = node_->create_subscription<fairino_msgs::msg::RobotNonrtState>("nonrt_state_data", 10, [this](const fairino_msgs::msg::RobotNonrtState::SharedPtr msg) { latest_state_ = msg; });
-    }
-    static BT::PortsList providedPorts() { return {}; }
-    BT::NodeStatus onStart() override {
-        target_pos_ = {-91.111, -49.863, 62.262, -107.5, -91.199, 47.568};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5],1.0};
-        pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
-    }
-    BT::NodeStatus onRunning() override { JOINT_CHECK_LOGIC(1.0) }
-    void onHalted() override {}
-private: rclcpp::Node::SharedPtr node_; rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_; rclcpp::Subscription<fairino_msgs::msg::RobotNonrtState>::SharedPtr sub_state_; std::vector<double> target_pos_; bool has_started_ = false; std::chrono::steady_clock::time_point cmd_time_; fairino_msgs::msg::RobotNonrtState::SharedPtr latest_state_ = nullptr;
-};
-
-// 【xh新加】绝对关节角撤退点
-class MoveToLidDropRetreat : public BT::StatefulActionNode {
-public:
-    MoveToLidDropRetreat(const std::string& name, const BT::NodeConfiguration& config, rclcpp::Node::SharedPtr node) : BT::StatefulActionNode(name, config), node_(node) {
-        pub_cmd_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>("/arm_control_cmd", 10);
-        sub_state_ = node_->create_subscription<fairino_msgs::msg::RobotNonrtState>("nonrt_state_data", 10, [this](const fairino_msgs::msg::RobotNonrtState::SharedPtr msg) { latest_state_ = msg; });
-    }
-    static BT::PortsList providedPorts() { return {}; }
-    BT::NodeStatus onStart() override {
-        target_pos_ = {-88.86, -58.578, 76.925, -109.098, -91.205, 47.568};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5],1.0};
-        pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
-    }
-    BT::NodeStatus onRunning() override { JOINT_CHECK_LOGIC(1.0) }
-    void onHalted() override {}
-private: rclcpp::Node::SharedPtr node_; rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_; rclcpp::Subscription<fairino_msgs::msg::RobotNonrtState>::SharedPtr sub_state_; std::vector<double> target_pos_; bool has_started_ = false; std::chrono::steady_clock::time_point cmd_time_; fairino_msgs::msg::RobotNonrtState::SharedPtr latest_state_ = nullptr;
-};
-
-class MoveToGunGrab : public BT::StatefulActionNode {
-public:
-    MoveToGunGrab(const std::string& name, const BT::NodeConfiguration& config, rclcpp::Node::SharedPtr node) : BT::StatefulActionNode(name, config), node_(node) {
-        pub_cmd_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>("/arm_control_cmd", 10);
-        sub_state_ = node_->create_subscription<fairino_msgs::msg::RobotNonrtState>("nonrt_state_data", 10, [this](const fairino_msgs::msg::RobotNonrtState::SharedPtr msg) { latest_state_ = msg; });
-    }
-    static BT::PortsList providedPorts() { return {}; }
-    BT::NodeStatus onStart() override {
-        target_pos_ = {-101.182, -67.327, 93.768, -114.608, -91.624, 47.568};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5],1.0};
-        pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
-    }
-    BT::NodeStatus onRunning() override { JOINT_CHECK_LOGIC(1.0) }
-    void onHalted() override {}
-private: rclcpp::Node::SharedPtr node_; rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_; rclcpp::Subscription<fairino_msgs::msg::RobotNonrtState>::SharedPtr sub_state_; std::vector<double> target_pos_; bool has_started_ = false; std::chrono::steady_clock::time_point cmd_time_; fairino_msgs::msg::RobotNonrtState::SharedPtr latest_state_ = nullptr;
-};
-
-class MoveToPreInject : public BT::StatefulActionNode {
-public:
-    MoveToPreInject(const std::string& name, const BT::NodeConfiguration& config, rclcpp::Node::SharedPtr node) : BT::StatefulActionNode(name, config), node_(node) {
-        pub_cmd_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>("/arm_control_cmd", 10);
-        sub_state_ = node_->create_subscription<fairino_msgs::msg::RobotNonrtState>("nonrt_state_data", 10, [this](const fairino_msgs::msg::RobotNonrtState::SharedPtr msg) { latest_state_ = msg; });
-    }
-    static BT::PortsList providedPorts() { return {}; }
-    BT::NodeStatus onStart() override {
-        target_pos_ = {-121.014, -42.733, 101.151, -236.295, -87.529, 47.567};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {3.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], target_pos_[3], target_pos_[4], target_pos_[5],1.0};
-        pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
-    }
-    BT::NodeStatus onRunning() override { JOINT_CHECK_LOGIC(1.0) }
-    void onHalted() override {}
-private: rclcpp::Node::SharedPtr node_; rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_; rclcpp::Subscription<fairino_msgs::msg::RobotNonrtState>::SharedPtr sub_state_; std::vector<double> target_pos_; bool has_started_ = false; std::chrono::steady_clock::time_point cmd_time_; fairino_msgs::msg::RobotNonrtState::SharedPtr latest_state_ = nullptr;
-};
-
-// =========================================================
-// 5. 注液核心
-// =========================================================
-class MoveToArUcoHover : public BT::StatefulActionNode {
-public:
-    MoveToArUcoHover(const std::string& name, const BT::NodeConfiguration& config, rclcpp::Node::SharedPtr node) : BT::StatefulActionNode(name, config), node_(node) {
-        pub_cmd_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>("/arm_control_cmd", 10);
-        sub_state_ = node_->create_subscription<fairino_msgs::msg::RobotNonrtState>("nonrt_state_data", 10, [this](const fairino_msgs::msg::RobotNonrtState::SharedPtr msg) { latest_state_ = msg; });
-    }
-    static BT::PortsList providedPorts() { return {}; }
-    BT::NodeStatus onStart() override {
-        if (GraspData::locked_aruco_pose.empty()) return BT::NodeStatus::FAILURE;
-        auto t = GraspData::locked_aruco_pose; target_pos_ = {t[0] + 90.0, t[1] - 110.0, t[2] + 350.0};
-        auto cmd = std_msgs::msg::Float64MultiArray(); cmd.data = {2.0, 15.0, target_pos_[0], target_pos_[1], target_pos_[2], 93.126, -49.220, -127.327,3.0};
-        pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
-    }
-    BT::NodeStatus onRunning() override { CARTESIAN_CHECK_LOGIC(3.0) }
-    void onHalted() override {}
-private: rclcpp::Node::SharedPtr node_; rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_; rclcpp::Subscription<fairino_msgs::msg::RobotNonrtState>::SharedPtr sub_state_; std::vector<double> target_pos_; bool has_started_ = false; std::chrono::steady_clock::time_point cmd_time_; fairino_msgs::msg::RobotNonrtState::SharedPtr latest_state_ = nullptr;
-};
-
-class MoveToArUcoInject : public BT::StatefulActionNode {
-public:
-    MoveToArUcoInject(const std::string& name, const BT::NodeConfiguration& config, rclcpp::Node::SharedPtr node) : BT::StatefulActionNode(name, config), node_(node) {
-        pub_cmd_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>("/arm_control_cmd", 10);
-        sub_state_ = node_->create_subscription<fairino_msgs::msg::RobotNonrtState>("nonrt_state_data", 10, [this](const fairino_msgs::msg::RobotNonrtState::SharedPtr msg) { latest_state_ = msg; });
-    }
-    static BT::PortsList providedPorts() { return {}; }
-    BT::NodeStatus onStart() override {
-        if (GraspData::locked_aruco_pose.empty()) return BT::NodeStatus::FAILURE;
-        auto t = GraspData::locked_aruco_pose; target_pos_ = {t[0] + 90.0, t[1] - 110.0, t[2] + 200.0};
-        auto cmd = std_msgs::msg::Float64MultiArray(); 
-        cmd.data = {1.0, 5.0, target_pos_[0], target_pos_[1], target_pos_[2], 93.126, -49.220, -127.327, 3.0};
-        pub_cmd_->publish(cmd); cmd_time_ = std::chrono::steady_clock::now(); has_started_ = false; return BT::NodeStatus::RUNNING;
-    }
-    BT::NodeStatus onRunning() override {
-        rclcpp::spin_some(node_);
-        if (!latest_state_) return BT::NodeStatus::RUNNING;
-        double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - cmd_time_).count();
-        bool reached = GraspData::check_cartesian_reached(target_pos_, *latest_state_, 3.0);
+        cmd.data = {3.0, speed, target_pos[0], target_pos[1], target_pos[2], target_pos[3], target_pos[4], target_pos[5], tol};
         
-        if (!has_started_) {
-            if (latest_state_->robot_motion_done == 0) { has_started_ = true; }
-            else if (elapsed > 2.0) {
-                if (reached) { RCLCPP_INFO(node_->get_logger(), "💧 到位注液5秒..."); std::this_thread::sleep_for(std::chrono::seconds(5)); return BT::NodeStatus::SUCCESS; }
+        GraspData::cmd_feedback_status = 0; // 重置反馈状态
+        pub_cmd_->publish(cmd);
+        
+        return BT::NodeStatus::RUNNING;
+    }
+
+    BT::NodeStatus onRunning() override {
+        rclcpp::spin_some(node_); // 刷新回调
+
+        // 纯粹的去算力化：只看底层给的信号
+        if (GraspData::cmd_feedback_status == 2) {
+            return BT::NodeStatus::SUCCESS;
+        } else if (GraspData::cmd_feedback_status == -1) {
+            RCLCPP_ERROR(node_->get_logger(), "🚨 底层反馈：动作执行失败或发生碰撞！");
+            return BT::NodeStatus::FAILURE;
+        }
+        
+        return BT::NodeStatus::RUNNING; // 如果是 0 或 1，继续等待
+    }
+
+    void onHalted() override {}
+
+private: 
+    rclcpp::Node::SharedPtr node_; 
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_;
+};
+
+// =========================================================
+// 5.万能相对笛卡尔直线运动 (支持基于 视觉目标 或 当前位置 的偏移)
+// =========================================================
+class MoveLRelativeAction : public BT::StatefulActionNode {
+public:
+    MoveLRelativeAction(const std::string& name, const BT::NodeConfiguration& config, rclcpp::Node::SharedPtr node) 
+        : BT::StatefulActionNode(name, config), node_(node) {
+        pub_cmd_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>("/arm_control_cmd", 10);
+        // 保留状态订阅，仅用于 base_target == "current" 时的原点提取
+        sub_state_ = node_->create_subscription<fairino_msgs::msg::RobotNonrtState>(
+            "nonrt_state_data", 10, [this](const fairino_msgs::msg::RobotNonrtState::SharedPtr msg) { latest_state_ = msg; });
+    }
+
+    // 暴露给 XML 的核心参数
+    static BT::PortsList providedPorts() {
+        return {
+            BT::InputPort<std::string>("base_target"), // 参考点："handle", "aruco", 或 "current"
+            BT::InputPort<double>("offset_x"),         // X轴偏移量
+            BT::InputPort<double>("offset_y"),         // Y轴偏移量
+            BT::InputPort<double>("offset_z"),         // Z轴偏移量
+            BT::InputPort<double>("speed"),            // 运行速度
+            BT::InputPort<double>("tol")               // 闭环容差
+        };
+    }
+
+    BT::NodeStatus onStart() override {
+        std::string base_target;
+        double dx = 0.0, dy = 0.0, dz = 0.0, speed = 15.0, tol = 3.0;
+
+        if (!getInput<std::string>("base_target", base_target)) {
+            RCLCPP_ERROR(node_->get_logger(), "未提供 base_target 参数！");
+            return BT::NodeStatus::FAILURE;
+        }
+        getInput<double>("offset_x", dx); getInput<double>("offset_y", dy); getInput<double>("offset_z", dz);
+        getInput<double>("speed", speed); getInput<double>("tol", tol);
+
+        std::vector<double> base_pose;
+        double target_rx = 0.0, target_ry = 0.0, target_rz = 0.0;
+
+        // =========================================================
+        // 【核心修正】：姿态解耦逻辑
+        // =========================================================
+        if (base_target == "handle") {
+            base_pose = GraspData::locked_handle_pose;
+            if (base_pose.size() >= 6) {
+                target_rx = base_pose[3]; target_ry = base_pose[4]; target_rz = base_pose[5]; // 把手：继承视觉姿态
+            }
+        } else if (base_target == "aruco") {
+            base_pose = GraspData::locked_aruco_pose;
+            if (!latest_state_) {
+                RCLCPP_ERROR(node_->get_logger(), "未获取到底层状态，无法继承当前注液姿态！");
                 return BT::NodeStatus::FAILURE;
             }
-            return BT::NodeStatus::RUNNING;
+            // ⚠️ 强硬姿态拦截：ArUco通道只用 XYZ，姿态强行锁定为机械臂当前姿态！
+            target_rx = latest_state_->cart_a_cur_pos; 
+            target_ry = latest_state_->cart_b_cur_pos; 
+            target_rz = latest_state_->cart_c_cur_pos;
+        } else if (base_target == "current") {
+            if (!latest_state_) return BT::NodeStatus::FAILURE;
+            base_pose = {latest_state_->cart_x_cur_pos, latest_state_->cart_y_cur_pos, latest_state_->cart_z_cur_pos};
+            target_rx = latest_state_->cart_a_cur_pos; 
+            target_ry = latest_state_->cart_b_cur_pos; 
+            target_rz = latest_state_->cart_c_cur_pos;
         } else {
-            if (latest_state_->robot_motion_done == 1) {
-                if (reached) { RCLCPP_INFO(node_->get_logger(), "💧 插入到位，注液5秒..."); std::this_thread::sleep_for(std::chrono::seconds(5)); return BT::NodeStatus::SUCCESS; }
-                RCLCPP_ERROR(node_->get_logger(), "💥 注液下探碰撞停机！"); return BT::NodeStatus::FAILURE;
-            }
-            return BT::NodeStatus::RUNNING;
+            return BT::NodeStatus::FAILURE;
         }
+
+        if (base_pose.empty() || base_pose.size() < 3) {
+            RCLCPP_ERROR(node_->get_logger(), "参考点数据为空！");
+            return BT::NodeStatus::FAILURE;
+        }
+
+        // 打包 9 位协议：完美融合视觉 XYZ 与 继承的 Rx, Ry, Rz
+        auto cmd = std_msgs::msg::Float64MultiArray(); 
+        cmd.data = {
+            1.0, speed, 
+            base_pose[0] + dx, base_pose[1] + dy, base_pose[2] + dz, 
+            target_rx, target_ry, target_rz, 
+            tol
+        };
+        
+        GraspData::cmd_feedback_status = 0;
+        pub_cmd_->publish(cmd);
+        
+        return BT::NodeStatus::RUNNING;
     }
+
+    BT::NodeStatus onRunning() override {
+        rclcpp::spin_some(node_); // 刷新回调
+
+        // 彻底去算力：无脑信任 control_node 传回来的校验结果
+        if (GraspData::cmd_feedback_status == 2) {
+            return BT::NodeStatus::SUCCESS;
+        } else if (GraspData::cmd_feedback_status == -1) {
+            RCLCPP_ERROR(node_->get_logger(), "🚨 底层反馈：动作执行失败或发生碰撞！");
+            return BT::NodeStatus::FAILURE;
+        }
+        return BT::NodeStatus::RUNNING;
+    }
+
     void onHalted() override {}
-private: rclcpp::Node::SharedPtr node_; rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_; rclcpp::Subscription<fairino_msgs::msg::RobotNonrtState>::SharedPtr sub_state_; std::vector<double> target_pos_; bool has_started_ = false; std::chrono::steady_clock::time_point cmd_time_; fairino_msgs::msg::RobotNonrtState::SharedPtr latest_state_ = nullptr;
+
+private: 
+    rclcpp::Node::SharedPtr node_; 
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_;
+    rclcpp::Subscription<fairino_msgs::msg::RobotNonrtState>::SharedPtr sub_state_;
+    fairino_msgs::msg::RobotNonrtState::SharedPtr latest_state_ = nullptr;
 };
 
 #endif // GRASP_ACTIONS_HPP

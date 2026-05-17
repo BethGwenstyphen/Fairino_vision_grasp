@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from fairino_msgs.msg import RobotNonrtState
-from std_msgs.msg import Float64MultiArray, Int8
+from std_msgs.msg import Float64MultiArray, Int8  # 确保引入了 Int8 消息类型
 import math
 
 class DigitalTwinSim(Node):
@@ -14,7 +14,6 @@ class DigitalTwinSim(Node):
         
         # 初始状态：大致对齐到你的 MoveToObserve 点位
         self.cur_joints = [-123.093, -54.4, 69.633, -105.855, -91.203, 47.568]
-        # 笛卡尔坐标初始值（假设为观察点的末端位姿）
         self.cur_cart = [300.0, 0.0, 500.0, 180.0, 0.0, 0.0] 
         
         self.target_pose = []
@@ -22,13 +21,19 @@ class DigitalTwinSim(Node):
         
         # 2. ROS 通信定义
         self.state_pub = self.create_publisher(RobotNonrtState, 'nonrt_state_data', 10)
+        
+        # =========================================================================
+        # 【核心升级】在纯仿真模式下，黑盒必须代为发布战报，否则去算力化的行为树会死锁死等
+        # =========================================================================
+        self.feedback_pub = self.create_publisher(Int8, '/cmd_feedback', 10)
+        
         self.cmd_sub = self.create_subscription(Float64MultiArray, '/arm_control_cmd', self.cmd_callback, 10)
         self.gripper_sub = self.create_subscription(Int8, '/gripper_control_cmd', self.gripper_callback, 10)
         
         # 3. 20Hz 物理引擎时钟
         self.timer = self.create_timer(0.05, self.physics_loop)
         
-        self.get_logger().info("🌐 数字孪生黑盒已启动！接管所有机械臂底层逻辑。")
+        self.get_logger().info("🌐 数字孪生黑盒已启动！接管底层硬件逻辑并全面兼容 V2 战报协议。")
 
     def gripper_callback(self, msg):
         state = "张开" if msg.data == 1 else "闭合"
@@ -37,12 +42,14 @@ class DigitalTwinSim(Node):
     def cmd_callback(self, msg):
         if len(msg.data) < 9: return
         self.move_type = int(msg.data[0])
-        # 提取目标位姿数据
         self.target_pose = list(msg.data[2:8])
         
         self.is_moving = True
         self.motion_done = 0
         self.get_logger().info(f"🚀 物理引擎截获指令: 模式 {self.move_type}, 目标 {self.target_pose[:3]}...")
+        
+        # 【协议对齐】拦截到指令的瞬间，模拟硬件向行为树上报：底层已起步 (1)
+        self.feedback_pub.publish(Int8(data=1))
 
     def physics_loop(self):
         # 如果正在移动，执行线性插值逼近
@@ -64,6 +71,11 @@ class DigitalTwinSim(Node):
                 self.is_moving = False
                 self.motion_done = 1
                 self.get_logger().info("✅ 物理引擎模拟: 到达目标位置！")
+                
+                # =========================================================================
+                # 【核心修复】模拟运动结束，强行向行为树反馈成功信号 (2)，瞬间解开行为树死锁！
+                # =========================================================================
+                self.feedback_pub.publish(Int8(data=2))
 
         # 无论是否移动，高频全网广播当前状态
         state_msg = RobotNonrtState()
